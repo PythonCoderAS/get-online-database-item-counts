@@ -17,9 +17,9 @@ class Main:
         self.arg_parser.add_argument("--all", action="store_true", help="Collect data from all sources.")
         display_option_group = self.arg_parser.add_mutually_exclusive_group(required=True)
         display_option_group.add_argument("--print", action="store_true", help="Print the data to the console.")
-        display_option_group.add_argument("--save-csv", action="store", help="Save the data to a CSV file.", nargs=1, metavar="FILE_PATH")
-        display_option_group.add_argument("--save-json", action="store", help="Save the data to a JSON file.", nargs=1, metavar="FILE_PATH")
-        display_option_group.add_argument("--save-db", action="store", help="Save the data to the SQLite database under the given table (will delete previous table contents if it exists).", nargs=1, metavar="TABLE_NAME")
+        display_option_group.add_argument("--save-csv", action="store", help="Save the data to a CSV file.", metavar="FILE_PATH")
+        display_option_group.add_argument("--save-json", action="store", help="Save the data to a JSON file.", metavar="FILE_PATH")
+        display_option_group.add_argument("--save-db", action="store", help="Save the data to the SQLite database under the given table (will delete previous table contents if it exists).", metavar="TABLE_NAME")
 
     async def setup_db(self):
         self.db = await connect(Path(__file__).parent.parent / "database.db.sqlite")
@@ -41,50 +41,52 @@ class Main:
         return providers
     
     async def main(self):
-        providers = self.get_potential_providers()
-        for provider in providers:
-            if provider.post_add_arg_parser_config is not None:
-                group = self.arg_parser.add_argument_group(title=provider.argument_group_name or provider.command_line_flag_name, description=provider.argument_group_description)
-                group.add_argument(f"--{provider.command_line_flag_name}", action="store_true", help=f"Collect data from {provider.argument_group_name or provider.command_line_flag_name}.")
-                provider.post_add_arg_parser_config(group)
-            else:
-                self.arg_parser.add_argument(f"--{provider.command_line_flag_name}", action="store_true", help=f"Collect data from {provider.argument_group_name or provider.command_line_flag_name}.")
-        args = self.arg_parser.parse_args()
-        to_run = [provider for provider in providers if getattr(args, provider.command_line_flag_name.replace("-", "_")) or (args.all and provider.include_in_all_flag)]
-        for provider in to_run:
-            if self.session is None:
-                self.session = RatelimitedSession()
-            if provider.add_ratelimits is not None:
-                for origin, ratelimit in provider.add_ratelimits.items():
-                    self.session.add_ratelimit(origin, ratelimit)
-            if not self.db and (provider.db_setup is not None or provider.needs_db):
-                await self.setup_db()
-            if provider.db_setup is not None:
-                await provider.db_setup(self.db)
-            result = await provider.run(self.get_run_args(args))
-            if args.print:
-                print(f"{provider.command_line_flag_name}: {result}")
-            if args.save_csv:
-                if not self.output_file:
-                    self.output_file = Path(args.save_csv).open("w")
-                    csv_writer = writer(self.output_file)
-                    csv_writer.writerow(["Provider", "Result"])
-                csv_writer = writer(self.output_file)
-                csv_writer.writerow([provider.command_line_flag_name, result])
-            if args.save_json:
-                if not self.output_file:
-                    self.output_file = Path(args.save_json).open("w")
-                self.output_file.write(dumps([provider.command_line_flag_name, result]))
-            if args.save_db:
-                print(args.save_db)
-                if not self.db:
+        try:
+            providers = self.get_potential_providers()
+            for provider in providers:
+                if provider.post_add_arg_parser_config is not None:
+                    group = self.arg_parser.add_argument_group(title=provider.argument_group_name or provider.command_line_flag_name, description=provider.argument_group_description)
+                    group.add_argument(f"--{provider.command_line_flag_name}", action="store_true", help=f"Collect data from {provider.argument_group_name or provider.command_line_flag_name}.")
+                    provider.post_add_arg_parser_config(group)
+                else:
+                    self.arg_parser.add_argument(f"--{provider.command_line_flag_name}", action="store_true", help=f"Collect data from {provider.argument_group_name or provider.command_line_flag_name}.")
+            args = self.arg_parser.parse_args()
+            to_run = [provider for provider in providers if getattr(args, provider.command_line_flag_name.replace("-", "_")) or (args.all and provider.include_in_all_flag)]
+            for provider in to_run:
+                if self.session is None:
+                    self.session = RatelimitedSession()
+                if provider.add_ratelimits is not None:
+                    for origin, ratelimit in provider.add_ratelimits.items():
+                        self.session.add_ratelimit(origin, ratelimit)
+                if not self.db and (provider.db_setup is not None or provider.needs_db):
                     await self.setup_db()
-                    cursor = await self.db.execute(f"CREATE TABLE IF NOT EXISTS {args.save_db} (provider TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY (provider))")
-                    await cursor.execute(f"DELETE FROM {args.save_db}")
-                await self.db.execute_insert(f"INSERT INTO {args.save_db} VALUES (?, ?)", (provider.command_line_flag_name, str(result)))
-        if self.db:
-            await self.close_db()
-        if self.output_file:
-            self.output_file.close()
-        if self.session:
-            await self.session.close()
+                if provider.db_setup is not None:
+                    await provider.db_setup(self.db)
+                result = await provider.run(self.get_run_args(args))
+                if args.print:
+                    print(f"{provider.command_line_flag_name}: {result}")
+                if args.save_csv:
+                    if not self.output_file:
+                        self.output_file = Path(args.save_csv).open("w")
+                        csv_writer = writer(self.output_file)
+                        csv_writer.writerow(["Provider", "Result"])
+                    csv_writer = writer(self.output_file)
+                    csv_writer.writerow([provider.command_line_flag_name, result])
+                if args.save_json:
+                    if not self.output_file:
+                        self.output_file = Path(args.save_json).open("w")
+                    self.output_file.write(dumps([provider.command_line_flag_name, result]))
+                if args.save_db:
+                    print(args.save_db)
+                    if not self.db:
+                        await self.setup_db()
+                        cursor = await self.db.execute(f"CREATE TABLE IF NOT EXISTS {args.save_db} (provider TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY (provider))")
+                        await cursor.execute(f"DELETE FROM {args.save_db}")
+                    await self.db.execute_insert(f"INSERT INTO {args.save_db} VALUES (?, ?)", (provider.command_line_flag_name, str(result)))
+        finally:
+            if self.db:
+                await self.close_db()
+            if self.output_file:
+                self.output_file.close()
+            if self.session:
+                await self.session.close()
